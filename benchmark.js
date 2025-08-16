@@ -1,6 +1,11 @@
 import pg from 'pg';
 import { performance } from 'perf_hooks';
 
+// Command line arguments
+const args = process.argv.slice(2);
+const runReads = !args.includes('--writes-only');
+const runWrites = !args.includes('--reads-only');
+
 const { Pool } = pg;
 
 const vanillaPool = new Pool({
@@ -48,8 +53,56 @@ const testQueries = {
   ]
 };
 
+// Generate test data matching Amazon SNAP format exactly
+function generateAmazonProducts(count, startId) {
+  const products = [];
+  const brands = [
+    'Apple', 'Samsung', 'Sony', 'Microsoft', 'Dell', 'HP', 'Lenovo', 'Asus', 
+    'Acer', 'Google', 'Amazon', 'Canon', 'Nikon', 'JBL', 'Bose', 'Unknown'
+  ];
+  const categories = [
+    '{Electronics}', '{Books}', '{Computers}', '{Cell Phones & Accessories}',
+    '{Video Games}', '{Sports & Outdoors}', '{Home & Kitchen}', '{Automotive}',
+    '{Health & Personal Care}', '{Beauty & Personal Care}', '{Clothing Shoes & Jewelry}'
+  ];
+  
+  const productTypes = [
+    'Wireless Bluetooth Headphones', 'Gaming Laptop Computer', 'Smartphone Device',
+    'Digital Camera', 'Mechanical Keyboard', 'Smart Watch', '4K Monitor',
+    'Bluetooth Speaker', 'Coffee Maker', 'Air Fryer', 'Tablet Computer',
+    'Gaming Mouse', 'Webcam', 'Microphone', 'Router', 'External Hard Drive'
+  ];
+  
+  // Use timestamp + random to ensure uniqueness within 20 char limit
+  const baseTime = Date.now().toString().slice(-8); // Last 8 digits of timestamp
+  const randomSuffix = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+  
+  for (let i = 0; i < count; i++) {
+    const id = startId + i;
+    const brand = brands[i % brands.length];
+    const productType = productTypes[i % productTypes.length];
+    const model = Math.floor(Math.random() * 9999) + 1000;
+    
+    // Generate unique ASIN within 20 character limit: T + 8 digits + 3 digits + 6 digits = 18 chars
+    const uniqueAsin = `T${baseTime}${randomSuffix}${i.toString().padStart(6, '0')}`;
+    
+    products.push({
+      asin: uniqueAsin,
+      title: `${brand} ${productType} Model ${model} - High Quality Professional Grade`,
+      description: `Premium ${productType.toLowerCase()} featuring advanced technology, wireless connectivity, bluetooth support, digital processing, smart features, high performance, reliable operation, professional quality, excellent design, and superior functionality. Model ${model} specifications include enhanced features for optimal user experience.`,
+      price: (Math.random() * 999 + 10).toFixed(2),
+      brand: brand,
+      categories: categories[i % categories.length],
+      sales_rank: i % 3 === 0 ? `{"Electronics": ${Math.floor(Math.random() * 1000000) + 1000}}` : null,
+      image_url: `http://test-images.example.com/product-${id}.jpg`
+    });
+  }
+  return products;
+}
+
 async function verifySetup() {
   console.log("========== VERIFYING SETUP ==========\n");
+  console.log("Note: Results show Time(Relevance) where relevance scores indicate search result quality\n");
   
   // Check Vanilla PostgreSQL
   const vanillaIndexes = await vanillaPool.query(`
@@ -265,14 +318,26 @@ async function runParadeQuery(query, searchType) {
 function calculateRelevance(results, query) {
   if (!results || results.length === 0) return 0;
   
-  const queryTerms = query.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/);
+  // Handle field searches (e.g., "title:iphone" -> extract "iphone")
+  let searchTerms;
+  if (query.includes(':')) {
+    const fieldQuery = query.split(':');
+    if (fieldQuery.length === 2) {
+      searchTerms = [fieldQuery[1].toLowerCase()];
+    } else {
+      searchTerms = query.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/);
+    }
+  } else {
+    searchTerms = query.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/);
+  }
+  
   let totalScore = 0;
   
   results.forEach((result, position) => {
-    const text = `${result.title || ''} ${result.brand || ''}`.toLowerCase();
+    const text = `${result.title || ''} ${result.brand || ''} ${result.description || ''}`.toLowerCase();
     let matchScore = 0;
     
-    queryTerms.forEach(term => {
+    searchTerms.forEach(term => {
       if (text.includes(term)) {
         matchScore += 2;
         const wordBoundaryRegex = new RegExp(`\\b${term}\\b`, 'i');
@@ -289,29 +354,11 @@ function calculateRelevance(results, query) {
   return Math.round(totalScore);
 }
 
-// Generate test data for writes
-function generateProducts(count, startId) {
-  const products = [];
-  const brands = ['Apple', 'Samsung', 'Sony', 'Microsoft', 'Dell', 'HP'];
-  
-  for (let i = 0; i < count; i++) {
-    const id = startId + i;
-    products.push({
-      asin: `TEST${id.toString().padStart(10, '0')}`,
-      title: `Test Product ${id} - ${brands[i % brands.length]}`,
-      description: `Test description with keywords wireless bluetooth digital smart`,
-      price: `${(Math.random() * 1000 + 50).toFixed(2)}`,
-      brand: brands[i % brands.length],
-      categories: ['Electronics']
-    });
-  }
-  return products;
-}
-
+// Write performance tests using the same products table
 async function testWrites(pool, dbName, count, batchSize) {
   console.log(`${dbName}: Testing ${count} inserts (batch size: ${batchSize})`);
   
-  const products = generateProducts(count, Date.now());
+  const products = generateAmazonProducts(count, Date.now());
   const start = performance.now();
   
   for (let i = 0; i < products.length; i += batchSize) {
@@ -323,15 +370,23 @@ async function testWrites(pool, dbName, count, batchSize) {
       let paramIndex = 1;
       
       for (const product of batch) {
-        placeholders.push(`($${paramIndex}, $${paramIndex+1}, $${paramIndex+2}, $${paramIndex+3}, $${paramIndex+4}, $${paramIndex+5})`);
-        values.push(product.asin, product.title, product.description, product.price, product.brand, '{"Electronics"}');
-        paramIndex += 6;
+        placeholders.push(`($${paramIndex}, $${paramIndex+1}, $${paramIndex+2}, $${paramIndex+3}, $${paramIndex+4}, $${paramIndex+5}, $${paramIndex+6}, $${paramIndex+7})`);
+        values.push(
+          product.asin, 
+          product.title, 
+          product.description, 
+          product.price, 
+          product.brand, 
+          product.categories,
+          product.sales_rank,
+          product.image_url
+        );
+        paramIndex += 8;
       }
       
       const query = `
-        INSERT INTO products (asin, title, description, price, brand, categories)
+        INSERT INTO products (asin, title, description, price, brand, categories, sales_rank, image_url)
         VALUES ${placeholders.join(', ')}
-        ON CONFLICT DO NOTHING
       `;
       
       await pool.query(query, values);
@@ -343,23 +398,31 @@ async function testWrites(pool, dbName, count, batchSize) {
   const totalTime = performance.now() - start;
   const rowsPerSec = Math.round(count / (totalTime / 1000));
   
-  console.log(`  ${totalTime.toFixed(0)}ms (${rowsPerSec} rows/sec)`);
+  console.log(`  ${totalTime.toFixed(0)}ms (${rowsPerSec.toLocaleString()} rows/sec)`);
   return { time: totalTime, rowsPerSec };
 }
 
 async function testSingleInserts(pool, dbName, count) {
   console.log(`${dbName}: Testing ${count} single inserts`);
   
-  const products = generateProducts(count, Date.now() + 100000);
+  const products = generateAmazonProducts(count, Date.now() + 100000);
   const start = performance.now();
   
   for (const product of products) {
     try {
       await pool.query(`
-        INSERT INTO products (asin, title, description, price, brand, categories)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT DO NOTHING
-      `, [product.asin, product.title, product.description, product.price, product.brand, '{"Electronics"}']);
+        INSERT INTO products (asin, title, description, price, brand, categories, sales_rank, image_url)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `, [
+        product.asin, 
+        product.title, 
+        product.description, 
+        product.price, 
+        product.brand, 
+        product.categories,
+        product.sales_rank,
+        product.image_url
+      ]);
     } catch (err) {
       console.error(`  Error inserting:`, err.message);
       break;
@@ -369,7 +432,7 @@ async function testSingleInserts(pool, dbName, count) {
   const totalTime = performance.now() - start;
   const rowsPerSec = Math.round(count / (totalTime / 1000));
   
-  console.log(`  ${totalTime.toFixed(0)}ms (${rowsPerSec} rows/sec)`);
+  console.log(`  ${totalTime.toFixed(0)}ms (${rowsPerSec.toLocaleString()} rows/sec)`);
   return { time: totalTime, rowsPerSec };
 }
 
@@ -378,7 +441,7 @@ async function testUpdates(pool, dbName, count) {
   
   // Get random existing records
   const result = await pool.query(`
-    SELECT id, title FROM products 
+    SELECT id, title, description FROM products 
     ORDER BY RANDOM() 
     LIMIT $1
   `, [count]);
@@ -398,7 +461,7 @@ async function testUpdates(pool, dbName, count) {
         WHERE id = $3
       `, [
         row.title + ' - UPDATED',
-        'Updated description with new keywords',
+        row.description + ' Enhanced with additional features and improved functionality.',
         row.id
       ]);
     } catch (err) {
@@ -409,8 +472,42 @@ async function testUpdates(pool, dbName, count) {
   const totalTime = performance.now() - start;
   const rowsPerSec = Math.round(result.rows.length / (totalTime / 1000));
   
-  console.log(`  ${totalTime.toFixed(0)}ms (${rowsPerSec} rows/sec)`);
+  console.log(`  ${totalTime.toFixed(0)}ms (${rowsPerSec.toLocaleString()} rows/sec)`);
   return { time: totalTime, rowsPerSec };
+}
+
+async function testIndexRebuild(pool, dbName) {
+  console.log(`${dbName}: Testing index rebuild performance`);
+  
+  if (dbName === 'ParadeDB') {
+    const start = performance.now();
+    
+    try {
+      await pool.query('SET max_parallel_maintenance_workers = 8');
+      await pool.query('SET maintenance_work_mem = \'512MB\'');
+      await pool.query('REINDEX INDEX products_search_idx');
+      
+      const totalTime = performance.now() - start;
+      console.log(`  Index rebuilt in ${totalTime.toFixed(0)}ms`);
+      return { time: totalTime };
+    } catch (err) {
+      console.error(`  Error rebuilding index:`, err.message);
+      return { time: 0 };
+    }
+  } else {
+    const start = performance.now();
+    
+    try {
+      await pool.query('REINDEX INDEX idx_combined_fulltext');
+      
+      const totalTime = performance.now() - start;
+      console.log(`  Index rebuilt in ${totalTime.toFixed(0)}ms`);
+      return { time: totalTime };
+    } catch (err) {
+      console.error(`  Error rebuilding index:`, err.message);
+      return { time: 0 };
+    }
+  }
 }
 
 async function runBenchmark() {
@@ -420,96 +517,175 @@ async function runBenchmark() {
     return;
   }
   
-  console.log("\n========== READ PERFORMANCE BENCHMARK ==========\n");
+  let readResults = {};
+  let writeResults = {};
   
-  const readResults = {};
-  
-  // Test each search type
-  for (const [searchType, queries] of Object.entries(testQueries)) {
-    console.log(`--- ${searchType.toUpperCase()} SEARCH ---`);
-    readResults[searchType] = {
-      vanilla: { totalTime: 0, totalRelevance: 0, queries: 0 },
-      parade: { totalTime: 0, totalRelevance: 0, queries: 0 }
-    };
+  // Read Performance Tests
+  if (runReads) {
+    console.log("\n========== READ PERFORMANCE BENCHMARK ==========\n");
     
-    for (const query of queries.slice(0, 5)) { // Test first 5 queries for speed
-      const vanillaResult = await runVanillaQuery(query, searchType);
-      const paradeResult = await runParadeQuery(query, searchType);
+    for (const [searchType, queries] of Object.entries(testQueries)) {
+      console.log(`--- ${searchType.toUpperCase()} SEARCH ---`);
+      readResults[searchType] = {
+        vanilla: { totalTime: 0, totalRelevance: 0, queries: 0 },
+        parade: { totalTime: 0, totalRelevance: 0, queries: 0 }
+      };
       
-      const vanillaRelevance = calculateRelevance(vanillaResult.results, query);
-      const paradeRelevance = calculateRelevance(paradeResult.results, query);
-      
-      console.log(`"${query}": Vanilla ${vanillaResult.duration}ms (${vanillaRelevance}) | ParadeDB ${paradeResult.duration}ms (${paradeRelevance})`);
-      
-      if (!vanillaResult.error) {
-        readResults[searchType].vanilla.totalTime += vanillaResult.duration;
-        readResults[searchType].vanilla.totalRelevance += vanillaRelevance;
-        readResults[searchType].vanilla.queries++;
+      for (const query of queries.slice(0, 5)) {
+        const vanillaResult = await runVanillaQuery(query, searchType);
+        const paradeResult = await runParadeQuery(query, searchType);
+        
+        const vanillaRelevance = calculateRelevance(vanillaResult.results, query);
+        const paradeRelevance = calculateRelevance(paradeResult.results, query);
+        
+        console.log(`"${query}": Vanilla ${vanillaResult.duration}ms (${vanillaRelevance}) | ParadeDB ${paradeResult.duration}ms (${paradeRelevance})`);
+        
+        if (!vanillaResult.error) {
+          readResults[searchType].vanilla.totalTime += vanillaResult.duration;
+          readResults[searchType].vanilla.totalRelevance += vanillaRelevance;
+          readResults[searchType].vanilla.queries++;
+        }
+        
+        if (!paradeResult.error) {
+          readResults[searchType].parade.totalTime += paradeResult.duration;
+          readResults[searchType].parade.totalRelevance += paradeRelevance;
+          readResults[searchType].parade.queries++;
+        }
       }
-      
-      if (!paradeResult.error) {
-        readResults[searchType].parade.totalTime += paradeResult.duration;
-        readResults[searchType].parade.totalRelevance += paradeRelevance;
-        readResults[searchType].parade.queries++;
-      }
+      console.log();
     }
-    console.log();
   }
   
-  console.log("========== WRITE PERFORMANCE BENCHMARK ==========\n");
-  
-  const writeResults = {};
-  
-  // Test batch inserts
-  console.log("--- BATCH INSERTS (1000 rows, batch size 100) ---");
-  writeResults.batchInsert = {
-    vanilla: await testWrites(vanillaPool, 'Vanilla', 1000, 100),
-    parade: await testWrites(paradePool, 'ParadeDB', 1000, 100)
-  };
-  
-  console.log("\n--- SINGLE INSERTS (50 rows) ---");
-  writeResults.singleInsert = {
-    vanilla: await testSingleInserts(vanillaPool, 'Vanilla', 50),
-    parade: await testSingleInserts(paradePool, 'ParadeDB', 50)
-  };
-  
-  console.log("\n--- UPDATES (100 rows) ---");
-  writeResults.updates = {
-    vanilla: await testUpdates(vanillaPool, 'Vanilla', 100),
-    parade: await testUpdates(paradePool, 'ParadeDB', 100)
-  };
+  // Write Performance Tests
+  if (runWrites) {
+    console.log("\n========== WRITE PERFORMANCE BENCHMARK ==========\n");
+    
+    console.log("--- SMALL BATCH INSERTS (100 rows, batch size 10) ---");
+    writeResults.smallBatch = {
+      vanilla: await testWrites(vanillaPool, 'Vanilla', 100, 10),
+      parade: await testWrites(paradePool, 'ParadeDB', 100, 10)
+    };
+    
+    console.log("\n--- MEDIUM BATCH INSERTS (1000 rows, batch size 100) ---");
+    writeResults.mediumBatch = {
+      vanilla: await testWrites(vanillaPool, 'Vanilla', 1000, 100),
+      parade: await testWrites(paradePool, 'ParadeDB', 1000, 100)
+    };
+    
+    console.log("\n--- LARGE BATCH INSERTS (5000 rows, batch size 500) ---");
+    writeResults.largeBatch = {
+      vanilla: await testWrites(vanillaPool, 'Vanilla', 5000, 500),
+      parade: await testWrites(paradePool, 'ParadeDB', 5000, 500)
+    };
+    
+    console.log("\n--- SINGLE INSERTS (50 rows) ---");
+    writeResults.singleInsert = {
+      vanilla: await testSingleInserts(vanillaPool, 'Vanilla', 50),
+      parade: await testSingleInserts(paradePool, 'ParadeDB', 50)
+    };
+    
+    console.log("\n--- UPDATES (100 rows) ---");
+    writeResults.updates = {
+      vanilla: await testUpdates(vanillaPool, 'Vanilla', 100),
+      parade: await testUpdates(paradePool, 'ParadeDB', 100)
+    };
+    
+    console.log("\n--- BULK UPDATES (1000 rows) ---");
+    writeResults.bulkUpdates = {
+      vanilla: await testUpdates(vanillaPool, 'Vanilla', 1000),
+      parade: await testUpdates(paradePool, 'ParadeDB', 1000)
+    };
+    
+    console.log("\n--- INDEX REBUILD PERFORMANCE ---");
+    writeResults.indexRebuild = {
+      vanilla: await testIndexRebuild(vanillaPool, 'Vanilla'),
+      parade: await testIndexRebuild(paradePool, 'ParadeDB')
+    };
+  }
   
   console.log("\n========== BENCHMARK SUMMARY ==========\n");
   
   // Read performance summary
-  console.log("READ PERFORMANCE (avg time | avg relevance):");
-  for (const [searchType, data] of Object.entries(readResults)) {
-    const vanillaAvg = data.vanilla.queries > 0 ? Math.round(data.vanilla.totalTime / data.vanilla.queries) : 0;
-    const paradeAvg = data.parade.queries > 0 ? Math.round(data.parade.totalTime / data.parade.queries) : 0;
-    const vanillaRel = data.vanilla.queries > 0 ? Math.round(data.vanilla.totalRelevance / data.vanilla.queries) : 0;
-    const paradeRel = data.parade.queries > 0 ? Math.round(data.parade.totalRelevance / data.parade.queries) : 0;
-    
-    const speedWinner = vanillaAvg < paradeAvg ? 'Vanilla' : 'ParadeDB';
-    const speedDiff = vanillaAvg && paradeAvg ? (Math.max(vanillaAvg, paradeAvg) / Math.min(vanillaAvg, paradeAvg)).toFixed(1) : 'N/A';
-    
-    console.log(`${searchType.padEnd(10)}: Vanilla ${vanillaAvg}ms (${vanillaRel}) | ParadeDB ${paradeAvg}ms (${paradeRel}) | Winner: ${speedWinner} ${speedDiff}x`);
+  if (runReads && Object.keys(readResults).length > 0) {
+    console.log("READ PERFORMANCE:");
+    console.log("┌─────────────┬──────────────────────┬──────────────────────┬─────────────────────┐");
+    console.log("│ Query Type  │      Vanilla PG      │      ParadeDB       │       Delta         │");
+    console.log("│             │   Time  │ Relevance  │   Time  │ Relevance │  Time   │ Relevance │");
+    console.log("├─────────────┼─────────┼────────────┼─────────┼───────────┼─────────┼───────────┤");
+    for (const [searchType, data] of Object.entries(readResults)) {
+      const vanillaAvg = data.vanilla.queries > 0 ? Math.round(data.vanilla.totalTime / data.vanilla.queries) : 0;
+      const paradeAvg = data.parade.queries > 0 ? Math.round(data.parade.totalTime / data.parade.queries) : 0;
+      const vanillaRel = data.vanilla.queries > 0 ? Math.round(data.vanilla.totalRelevance / data.vanilla.queries) : 0;
+      const paradeRel = data.parade.queries > 0 ? Math.round(data.parade.totalRelevance / data.parade.queries) : 0;
+      
+      // Calculate deltas (ParadeDB - Vanilla, negative means ParadeDB is faster/lower)
+      const timeDelta = paradeAvg - vanillaAvg;
+      const relDelta = paradeRel - vanillaRel;
+      const timeSign = timeDelta > 0 ? '+' : '';
+      const relSign = relDelta > 0 ? '+' : '';
+      
+      console.log(`│ ${searchType.padEnd(11)} │ ${vanillaAvg.toString().padStart(5)}ms │ ${vanillaRel.toString().padStart(8)}   │ ${paradeAvg.toString().padStart(5)}ms │ ${paradeRel.toString().padStart(7)}   │ ${(timeSign + timeDelta).padStart(6)}ms │ ${(relSign + relDelta).padStart(7)}   │`);
+    }
+    console.log("└─────────────┴─────────┴────────────┴─────────┴───────────┴─────────┴───────────┘");
+    console.log("Time: negative = ParadeDB faster | Relevance: positive = ParadeDB better");
   }
   
   // Write performance summary
-  console.log("\nWRITE PERFORMANCE (rows/sec):");
-  for (const [writeType, data] of Object.entries(writeResults)) {
-    const speedWinner = data.vanilla.rowsPerSec > data.parade.rowsPerSec ? 'Vanilla' : 'ParadeDB';
-    const speedDiff = (Math.max(data.vanilla.rowsPerSec, data.parade.rowsPerSec) / Math.min(data.vanilla.rowsPerSec, data.parade.rowsPerSec)).toFixed(1);
-    
-    console.log(`${writeType.padEnd(12)}: Vanilla ${data.vanilla.rowsPerSec} | ParadeDB ${data.parade.rowsPerSec} | Winner: ${speedWinner} ${speedDiff}x`);
+  if (runWrites && Object.keys(writeResults).length > 0) {
+    console.log("\nWRITE PERFORMANCE:");
+    console.log("┌──────────────────┬─────────────────┬─────────────────┬─────────────────┐");
+    console.log("│ Operation        │   Vanilla PG    │    ParadeDB     │      Delta      │");
+    console.log("├──────────────────┼─────────────────┼─────────────────┼─────────────────┤");
+    for (const [writeType, data] of Object.entries(writeResults)) {
+      if (writeType === 'indexRebuild') {
+        if (data.vanilla.time && data.parade.time) {
+          const vanillaTime = `${data.vanilla.time.toFixed(0)}ms`;
+          const paradeTime = `${data.parade.time.toFixed(0)}ms`;
+          const timeDelta = data.parade.time - data.vanilla.time;
+          const deltaSign = timeDelta > 0 ? '+' : '';
+          const deltaStr = `${deltaSign}${timeDelta.toFixed(0)}ms`;
+          console.log(`│ ${writeType.padEnd(16)} │ ${vanillaTime.padStart(13)}   │ ${paradeTime.padStart(13)}   │ ${deltaStr.padStart(13)}   │`);
+        }
+      } else if (data.vanilla.rowsPerSec && data.parade.rowsPerSec) {
+        const vanillaRate = `${data.vanilla.rowsPerSec.toLocaleString()}/sec`;
+        const paradeRate = `${data.parade.rowsPerSec.toLocaleString()}/sec`;
+        const rateDelta = data.parade.rowsPerSec - data.vanilla.rowsPerSec;
+        const deltaSign = rateDelta > 0 ? '+' : '';
+        const deltaStr = `${deltaSign}${rateDelta.toLocaleString()}/sec`;
+        console.log(`│ ${writeType.padEnd(16)} │ ${vanillaRate.padStart(13)}   │ ${paradeRate.padStart(13)}   │ ${deltaStr.padStart(13)}   │`);
+      }
+    }
+    console.log("└──────────────────┴─────────────────┴─────────────────┴─────────────────┘");
+    console.log("Rate: positive = ParadeDB higher throughput | Time: negative = ParadeDB faster");
   }
   
 }
 
-// Run the comprehensive benchmark
+// Usage information
+if (args.includes('--help')) {
+  console.log(`
+PostgreSQL vs ParadeDB Benchmark Tool
+
+Usage:
+  node benchmark.js [options]
+
+Options:
+  --help              Show this help message
+  --reads-only        Run only read performance tests
+  --writes-only       Run only write performance tests
+
+Examples:
+  node benchmark.js                    # Run all tests
+  node benchmark.js --reads-only       # Test search performance only  
+  node benchmark.js --writes-only      # Test write performance only
+`);
+  process.exit(0);
+}
+
+// Run the benchmark
 runBenchmark()
   .then(() => {
-    console.log("\n✅ Comprehensive benchmark complete!");
+    console.log("\nBenchmark complete!");
     process.exit(0);
   })
   .catch(err => {

@@ -5,9 +5,10 @@
   "scripts": {
     "dev": "node --watch server.js",
     "start": "node server.js",
-    "setup": "node setup.js",
-    "setup-amazon": "node download-amazon-data.js",
-    "generate-data": "go run data-generator.go"
+    "benchmark": "node benchmark.js",
+    "benchmark:reads": "node benchmark.js --reads-only", 
+    "benchmark:writes": "node benchmark.js --writes-only",
+    "setup": "go run ingest-amazon-data.go"
   },
   "dependencies": {
     "express": "^4.18.2",
