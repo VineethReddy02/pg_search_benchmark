@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  postgres-vanilla:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: benchmark_vanilla
+      POSTGRES_USER: benchmark
+      POSTGRES_PASSWORD: benchmark123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_vanilla_data:/var/lib/postgresql/data
+    command: >
+      postgres
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=64MB
+      -c work_mem=4MB
+
+  postgres-paradedb:
+    image: paradedb/paradedb:latest
+    environment:
+      POSTGRES_DB: benchmark_parade
+      POSTGRES_USER: benchmark
+      POSTGRES_PASSWORD: benchmark123
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_parade_data:/var/lib/postgresql/data
+    command: >
+      postgres
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=64MB
+      -c work_mem=4MB
+
+volumes:
+  postgres_vanilla_data:
+  postgres_parade_data:

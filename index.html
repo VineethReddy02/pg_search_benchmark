@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PostgreSQL vs ParadeDB Search Benchmark</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Courier New', 'Monaco', 'Menlo', monospace;
+            background: #ffffff;
+            color: #000000;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1 { 
+            color: #000000; 
+            text-align: center; 
+            margin-bottom: 10px; 
+            font-size: 2em; 
+            font-weight: bold;
+            border: 2px solid #000000; 
+            padding: 20px; 
+            background: #ffffff;
+        }
+        .subtitle { 
+            color: #333333; 
+            text-align: center; 
+            margin-bottom: 30px; 
+            font-family: monospace; 
+            font-size: 0.9em;
+        }
+        .tabs {
+            display: flex;
+            gap: 5px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #000;
+        }
+        .tab-button {
+            background: #ffffff;
+            color: #000000;
+            border: 2px solid #000000;
+            border-bottom: none;
+            padding: 10px 20px;
+            font-size: 14px;
+            font-family: 'Courier New', monospace;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .tab-button.active {
+            background: #000000;
+            color: #ffffff;
+        }
+        .tab-button:hover:not(.active) {
+            background: #f0f0f0;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .schema-container {
+            margin-top: 20px;
+        }
+        .schema-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+        }
+        .schema-card {
+            border: 2px solid #000000;
+            padding: 20px;
+            background: #ffffff;
+        }
+        .schema-card h3 {
+            font-weight: bold;
+            margin-bottom: 20px;
+            font-size: 1.1em;
+        }
+        .schema-section {
+            margin-bottom: 20px;
+        }
+        .schema-section h4 {
+            font-weight: bold;
+            font-size: 0.9em;
+            margin-bottom: 8px;
+            color: #333;
+        }
+        .schema-info {
+            background: #f5f5f5;
+            padding: 12px;
+            border: 1px solid #ddd;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+            line-height: 1.4;
+        }
+        .search-box { 
+            background: #ffffff; 
+            padding: 15px; 
+            margin-bottom: 15px; 
+        }
+        .search-controls { 
+            display: flex; 
+            gap: 10px; 
+            margin-bottom: 20px; 
+        }
+        input[type="text"] {
+            flex: 1; 
+            padding: 12px 20px; 
+            border: 2px solid #000000; 
+            background: #ffffff;
+            color: #000000; 
+            font-size: 16px; 
+            font-family: 'Courier New', monospace;
+        }
+        select {
+            padding: 12px 20px; 
+            border: 2px solid #000000; 
+            background: #ffffff;
+            color: #000000; 
+            font-size: 16px; 
+            font-family: 'Courier New', monospace;
+        }
+        button {
+            background: #ffffff; 
+            color: #000000; 
+            border: 2px solid #000000;
+            padding: 12px 30px; 
+            font-size: 16px; 
+            font-family: 'Courier New', monospace;
+            cursor: pointer; 
+            font-weight: bold;
+        }
+        button:hover { 
+            background: #000000; 
+            color: #ffffff; 
+        }
+        .loading { 
+            display: none; 
+            text-align: center; 
+            padding: 20px; 
+        }
+        .loading.active { 
+            display: block; 
+        }
+        .speedup-banner {
+            background: #ffffff; 
+            color: #000000; 
+            padding: 20px; 
+            border: 2px solid #000000;
+            text-align: center; 
+            margin-bottom: 20px; 
+            font-size: 1.3em;
+        }
+        .speedup-value { 
+            font-size: 2em; 
+            font-weight: bold; 
+            margin-top: 10px; 
+        }
+        .results { 
+            display: grid; 
+            grid-template-columns: 1fr 1fr; 
+            gap: 20px; 
+        }
+        .result-card { 
+            background: #ffffff; 
+            border: 2px solid #000000; 
+            padding: 20px; 
+        }
+        .result-card h3 {
+            font-weight: bold;
+            margin-bottom: 15px;
+            font-size: 1.1em;
+        }
+        .metric-line {
+            margin: 8px 0;
+            font-size: 0.95em;
+        }
+        .query-section {
+            margin-top: 15px;
+        }
+        .results-section {
+            margin-top: 15px;
+        }
+        .results-header {
+            font-weight: bold;
+            margin-bottom: 8px;
+            font-size: 0.9em;
+        }
+        .results-list {
+            border: 1px solid #ccc;
+            background: #f9f9f9;
+        }
+        .result-item {
+            padding: 12px;
+            border-bottom: 1px solid #eee;
+            font-size: 12px;
+            font-family: 'Courier New', monospace;
+            line-height: 1.4;
+        }
+        .result-item:last-child {
+            border-bottom: none;
+        }
+        .result-title {
+            font-weight: bold;
+            color: #000;
+        }
+        .result-details {
+            color: #666;
+            margin-top: 2px;
+        }
+        .query-block {
+            background: #000000;
+            color: #ffffff;
+            padding: 15px;
+            margin: 10px 0 0 0;
+            font-size: 14px;
+            border: 1px solid #333;
+            font-family: 'Courier New', monospace;
+            white-space: pre-wrap;
+            line-height: 1.4;
+            display: block;
+            font-weight: 500;
+        }
+        @media (max-width: 768px) {
+            .results { grid-template-columns: 1fr; }
+            .search-controls { flex-direction: column; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>PG SEARCH Vs Vanilla PG</h1>
+        <p class="subtitle">ParadeDB 0.17.2 (PostgreSQL 17) vs Vanilla PostgreSQL 17 | Dataset: <span id="datasetInfo">Loading...</span></p>
+        
+        <div class="tabs">
+            <button class="tab-button active" onclick="switchTab('benchmark')">Benchmark</button>
+            <button class="tab-button" onclick="switchTab('schema')">Database Schema</button>
+        </div>
+        
+        <div id="benchmark-tab" class="tab-content active">
+            <div class="search-box">
+            <div class="search-controls">
+                <input type="text" id="searchQuery" placeholder="> Enter search query..." />
+                <select id="searchType">
+                    <option value="fulltext">Full-Text Search</option>
+                    <option value="boolean">Boolean Query (AND/OR/NOT)</option>
+                    <option value="field">Field-Specific (title:term)</option>
+                    <option value="like">Fuzzy/Pattern Matching</option>
+                    <option value="exact">Exact Phrase Search</option>
+                </select>
+                <button onclick="runBenchmark()">[EXECUTE]</button>
+            </div>
+            
+            <div class="loading" id="loading">
+                <p style="color: #000000;">[EXECUTING BENCHMARK...]</p>
+            </div>
+        </div>
+        
+        <div id="speedupBanner" class="speedup-banner" style="display: none;">
+            <div>QUERY: "<span id="queryText"></span>" [<span id="queryType"></span>]</div>
+            <div class="speedup-value"><span id="speedupValue"></span> FASTER</div>
+        </div>
+        
+        <div id="accuracyBanner" class="speedup-banner" style="display: none;">
+            <div>ACCURACY WINNER: <span id="accuracyWinner"></span></div>
+            <div class="speedup-value"><span id="accuracyDiff"></span>% MORE RELEVANT</div>
+        </div>
+        
+        <div class="results" id="results" style="display: none;">
+            <div class="result-card">
+                <h3>[VANILLA POSTGRESQL]</h3>
+                <div class="metric-line">EXECUTION TIME: <strong id="vanillaTime">-</strong></div>
+                <div class="metric-line">RESULTS FOUND: <strong id="vanillaCount">-</strong></div>
+                <div class="metric-line">STACK: <strong id="vanillaTech">-</strong></div>
+                <div class="metric-line">RELEVANCE SCORE: <strong id="vanillaRelevance">-</strong></div>
+                <div class="metric-line">NDCG SCORE: <strong id="vanillaNDCG">-</strong></div>
+                <div class="results-section">
+                    <div class="results-header">SAMPLE RESULTS (First 10):</div>
+                    <div class="results-list" id="vanillaResults"></div>
+                </div>
+                <div class="query-section">
+                    <pre class="query-block" id="vanillaQuery"></pre>
+                </div>
+            </div>
+            
+            <div class="result-card">
+                <h3>[PARADEDB]</h3>
+                <div class="metric-line">EXECUTION TIME: <strong id="paradeTime">-</strong></div>
+                <div class="metric-line">RESULTS FOUND: <strong id="paradeCount">-</strong></div>
+                <div class="metric-line">STACK: <strong id="paradeTech">-</strong></div>
+                <div class="metric-line">RELEVANCE SCORE: <strong id="paradeRelevance">-</strong></div>
+                <div class="metric-line">NDCG SCORE: <strong id="paradeNDCG">-</strong></div>
+                <div class="results-section">
+                    <div class="results-header">SAMPLE RESULTS (First 10):</div>
+                    <div class="results-list" id="paradeResults"></div>
+                </div>
+                <div class="query-section">
+                    <pre class="query-block" id="paradeQuery"></pre>
+                </div>
+            </div>
+        </div>
+        </div>
+        
+        <div id="schema-tab" class="tab-content">
+            <div class="schema-container">
+                <div class="schema-grid">
+                    <div class="schema-card">
+                        <h3>[VANILLA POSTGRESQL]</h3>
+                        <div class="schema-section">
+                            <h4>TABLE STRUCTURE</h4>
+                            <div class="schema-info" id="vanillaSchema">Loading...</div>
+                        </div>
+                        <div class="schema-section">
+                            <h4>INDEXES</h4>
+                            <div class="schema-info" id="vanillaIndexes">Loading...</div>
+                        </div>
+                        <div class="schema-section">
+                            <h4>EXTENSIONS</h4>
+                            <div class="schema-info" id="vanillaExtensions">Loading...</div>
+                        </div>
+                        <div class="schema-section">
+                            <h4>RECORDS</h4>
+                            <div class="schema-info" id="vanillaRecords">Loading...</div>
+                        </div>
+                    </div>
+                    
+                    <div class="schema-card">
+                        <h3>[PARADEDB]</h3>
+                        <div class="schema-section">
+                            <h4>TABLE STRUCTURE</h4>
+                            <div class="schema-info" id="paradeSchema">Loading...</div>
+                        </div>
+                        <div class="schema-section">
+                            <h4>INDEXES</h4>
+                            <div class="schema-info" id="paradeIndexes">Loading...</div>
+                        </div>
+                        <div class="schema-section">
+                            <h4>EXTENSIONS</h4>
+                            <div class="schema-info" id="paradeExtensions">Loading...</div>
+                        </div>
+                        <div class="schema-section">
+                            <h4>RECORDS</h4>
+                            <div class="schema-info" id="paradeRecords">Loading...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        async function runBenchmark() {
+            const query = document.getElementById('searchQuery').value;
+            const searchType = document.getElementById('searchType').value;
+            
+            if (!query) {
+                alert('Please enter a search query');
+                return;
+            }
+            
+            document.getElementById('loading').classList.add('active');
+            document.getElementById('speedupBanner').style.display = 'none';
+            document.getElementById('accuracyBanner').style.display = 'none';
+            document.getElementById('results').style.display = 'none';
+            
+            try {
+                const response = await fetch('/api/benchmark', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query, searchType })
+                });
+                
+                const data = await response.json();
+                
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                
+                displayResults(data);
+            } catch (error) {
+                console.error('Benchmark failed:', error);
+                alert('Benchmark failed: ' + error.message);
+            } finally {
+                document.getElementById('loading').classList.remove('active');
+            }
+        }
+        
+        function displayResults(data) {
+            // Speedup banner
+            document.getElementById('queryText').textContent = data.query;
+            document.getElementById('queryType').textContent = data.searchType.toUpperCase();
+            document.getElementById('speedupValue').textContent = data.speedup || 'N/A';
+            document.getElementById('speedupBanner').style.display = 'block';
+            
+            // Accuracy banner
+            if (data.accuracy && data.accuracy.winner !== 'tie') {
+                const winnerName = data.accuracy.winner.toUpperCase() === 'VANILLA' ? 'VANILLA PG' : 'PARADEDB';
+                document.getElementById('accuracyWinner').textContent = winnerName;
+                document.getElementById('accuracyDiff').textContent = data.accuracy.difference;
+                document.getElementById('accuracyBanner').style.display = 'block';
+            } else {
+                document.getElementById('accuracyBanner').style.display = 'none';
+            }
+            
+            // Vanilla PostgreSQL
+            document.getElementById('vanillaTime').textContent = data.vanilla.duration + 'ms';
+            document.getElementById('vanillaCount').textContent = data.vanilla.count.toLocaleString();
+            document.getElementById('vanillaTech').textContent = getTechLabel('vanilla', data.searchType);
+            document.getElementById('vanillaRelevance').textContent = (data.vanilla.relevanceScore || 'N/A');
+            document.getElementById('vanillaNDCG').textContent = (data.vanilla.ndcgScore || 'N/A');
+            document.getElementById('vanillaQuery').textContent = formatQuery(data.vanilla.actualQuery || 'No query available');
+            document.getElementById('vanillaResults').innerHTML = formatResults(data.vanilla.results || []);
+            
+            // ParadeDB
+            document.getElementById('paradeTime').textContent = data.parade.duration + 'ms';
+            document.getElementById('paradeCount').textContent = data.parade.count.toLocaleString();
+            document.getElementById('paradeTech').textContent = getTechLabel('parade', data.searchType);
+            document.getElementById('paradeRelevance').textContent = (data.parade.relevanceScore || 'N/A');
+            document.getElementById('paradeNDCG').textContent = (data.parade.ndcgScore || 'N/A');
+            document.getElementById('paradeQuery').textContent = formatQuery(data.parade.actualQuery || 'No query available');
+            document.getElementById('paradeResults').innerHTML = formatResults(data.parade.results || []);
+            
+            document.getElementById('results').style.display = 'grid';
+        }
+        
+        function formatResults(results) {
+            if (!results || results.length === 0) {
+                return '<div class="result-item">No results found</div>';
+            }
+            
+            // Build results HTML with detailed field information
+            let html = '';
+            for (let i = 0; i < Math.min(results.length, 10); i++) {
+                const item = results[i];
+                const matchInfo = item.match_fields ? ` | Matched: ${item.match_fields.trim()}` : '';
+                const description = item.description ? 
+                    (item.description.length > 150 ? item.description.substring(0, 150) + '...' : item.description) : 'N/A';
+                
+                html += `<div class="result-item">
+                    <div class="result-title">${item.title || 'N/A'}</div>
+                    <div class="result-details">
+                        Price: $${item.price || 'N/A'} | Brand: ${item.brand || 'Unknown'} | ASIN: ${item.asin || item.id || 'N/A'}${matchInfo}
+                    </div>
+                    <div class="result-description" style="font-size: 11px; color: #666; margin-top: 4px;">
+                        ${description}
+                    </div>
+                </div>`;
+            }
+            return html;
+        }
+        
+        function formatQuery(query) {
+            // Simplified formatting for performance
+            return query
+                .replace(/SELECT /gi, 'SELECT\n  ')
+                .replace(/FROM /gi, '\n\nFROM\n  ')
+                .replace(/WHERE /gi, '\n\nWHERE\n  ')
+                .replace(/ORDER BY /gi, '\n\nORDER BY\n  ')
+                .replace(/LIMIT /gi, '\n\nLIMIT\n  ')
+                .replace(/ AND /gi, '\n  AND ')
+                .replace(/ OR /gi, '\n  OR ')
+                .replace(/--/g, '\n--');
+        }
+        
+        function getTechLabel(engine, searchType) {
+            const techMap = {
+                vanilla: {
+                    'fulltext': 'ts_vector + ts_rank + GIN',
+                    'boolean': 'ts_query + GIN',
+                    'field': 'pg_trgm similarity',
+                    'like': 'ILIKE operator',
+                    'exact': 'phraseto_tsquery'
+                },
+                parade: {
+                    'fulltext': 'BM25 index',
+                    'boolean': 'BM25 boolean',
+                    'field': 'BM25 field search',
+                    'like': 'Fuzzy match (distance=2)',
+                    'exact': 'BM25 phrase search'
+                }
+            };
+            return techMap[engine][searchType] || 'Unknown';
+        }
+        
+        // Tab switching
+        function switchTab(tabName) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Remove active class from all buttons
+            document.querySelectorAll('.tab-button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            
+            // Show selected tab and mark button as active
+            document.getElementById(tabName + '-tab').classList.add('active');
+            event.target.classList.add('active');
+            
+            // Load schema data when switching to schema tab
+            if (tabName === 'schema') {
+                loadSchemaData();
+            }
+        }
+        
+        // Load schema information
+        async function loadSchemaData() {
+            try {
+                const response = await fetch('/api/schema');
+                const data = await response.json();
+                
+                // Vanilla PostgreSQL
+                document.getElementById('vanillaSchema').textContent = data.vanilla.schema || 'No data available';
+                document.getElementById('vanillaIndexes').textContent = data.vanilla.indexes || 'No data available';
+                document.getElementById('vanillaExtensions').textContent = data.vanilla.extensions || 'No data available';
+                document.getElementById('vanillaRecords').textContent = data.vanilla.records || 'No data available';
+                
+                // ParadeDB
+                document.getElementById('paradeSchema').textContent = data.parade.schema || 'No data available';
+                document.getElementById('paradeIndexes').textContent = data.parade.indexes || 'No data available';
+                document.getElementById('paradeExtensions').textContent = data.parade.extensions || 'No data available';
+                document.getElementById('paradeRecords').textContent = data.parade.records || 'No data available';
+            } catch (error) {
+                console.error('Failed to load schema data:', error);
+            }
+        }
+        
+        // Enter key support
+        document.getElementById('searchQuery').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                runBenchmark();
+            }
+        });
+        
+        // Load dataset size on page load
+        fetch('/api/stats')
+            .then(res => res.json())
+            .then(data => {
+                const count = Number(data.vanilla.count).toLocaleString();
+                document.getElementById('datasetInfo').textContent = `${count} products`;
+                console.log('Dataset loaded:', count, 'products');
+            })
+            .catch(error => {
+                console.error('Failed to load stats:', error);
+                document.getElementById('datasetInfo').textContent = 'Unknown dataset size';
+            });
+    </script>
+</body>
+</html>
