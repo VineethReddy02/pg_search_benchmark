@@ -19,7 +19,7 @@ services:
       -c work_mem=4MB
 
   postgres-paradedb:
-    image: paradedb/paradedb:latest
+    image: paradedb/paradedb:0.18.0
     environment:
       POSTGRES_DB: benchmark_parade
       POSTGRES_USER: benchmark
